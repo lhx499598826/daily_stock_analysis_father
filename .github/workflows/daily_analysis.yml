@@ -258,17 +258,68 @@ jobs:
           REPO="${{ github.repository }}"
           REF="${{ github.ref_name }}"
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          MSG="【daily_stock_analysis】任务状态: ${STATUS}\n仓库: ${REPO}\n分支: ${REF}\n详情: ${RUN_URL}"
 
-          PAYLOAD=$(printf '{"msgtype":"text","text":{"content":"%s"}}' "$(printf '%s' "$MSG" | sed 's/"/\\"/g')")
-          RESP=$(curl -sS "$WECOM_WEBHOOK_URL" \
-            --retry 3 --retry-delay 3 --retry-connrefused \
-            --connect-timeout 15 --max-time 60 \
-            -H 'Content-Type: application/json' \
-            -d "$PAYLOAD" || true)
-          if [ -z "$RESP" ]; then
-            echo "企业微信通知发送失败（已忽略，不影响主任务）"
-            exit 0
-          fi
-          echo "$RESP"
+          python3 - <<'PY2'
+          import os, json, time, urllib.request
+          from pathlib import Path
+
+          webhook = os.environ.get("WECOM_WEBHOOK_URL", "")
+          status = os.environ.get("STATUS", "")
+          repo = os.environ.get("REPO", "")
+          ref = os.environ.get("REF", "")
+          run_url = os.environ.get("RUN_URL", "")
+
+          report_dir = Path("reports")
+          candidates = []
+          if report_dir.exists():
+              for pat in ("*.md", "*.txt", "*.log"):
+                  candidates.extend(report_dir.glob(pat))
+          candidates = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+
+          if candidates:
+              report_file = candidates[0]
+              content = report_file.read_text(encoding="utf-8", errors="ignore")
+              header = f"【daily_stock_analysis】报告全文
+状态: {status}
+仓库: {repo}
+分支: {ref}
+文件: {report_file.name}
+详情: {run_url}
+
+"
+              full_text = header + content
+          else:
+              full_text = f"【daily_stock_analysis】未找到报告文件
+状态: {status}
+仓库: {repo}
+分支: {ref}
+详情: {run_url}"
+
+          max_len = 1700
+          chunks = [full_text[i:i+max_len] for i in range(0, len(full_text), max_len)] or [full_text]
+
+          def post_text(text):
+              payload = json.dumps({"msgtype":"text","text":{"content":text}}, ensure_ascii=False).encode("utf-8")
+              req = urllib.request.Request(webhook, data=payload, headers={"Content-Type":"application/json"})
+              last_err = None
+              for _ in range(3):
+                  try:
+                      with urllib.request.urlopen(req, timeout=30) as resp:
+                          body = resp.read().decode("utf-8", errors="ignore")
+                      return body
+                  except Exception as e:
+                      last_err = e
+                      time.sleep(2)
+              raise last_err
+
+          for i, c in enumerate(chunks, 1):
+              msg = c if len(chunks) == 1 else f"[全文 {i}/{len(chunks)}]
+" + c
+              try:
+                  body = post_text(msg)
+                  print(body)
+              except Exception as e:
+                  print(f"企业微信通知发送失败（已忽略，不影响主任务）: {e}")
+                  break
+          PY2
 
