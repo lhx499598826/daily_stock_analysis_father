@@ -255,11 +255,11 @@ class StockAnalysisPipeline:
             if self.search_service.is_available:
                 logger.info(f"{stock_name}({code}) 开始多维度情报搜索...")
 
-                # 使用多维度搜索（最多5次搜索）
+                # 使用多维度搜索（可通过 INTEL_MAX_SEARCHES 配置）
                 intel_results = self.search_service.search_comprehensive_intel(
                     stock_code=code,
                     stock_name=stock_name,
-                    max_searches=2
+                    max_searches=self.config.intel_max_searches
                 )
 
                 # 格式化情报报告
